@@ -1,0 +1,346 @@
+---
+title: "R Notebook - Getting started with Assignment 1 (part A)  on Lending Club case"
+author: "sid b"
+date: "Feb 3, 2021"
+output:
+  html_document:
+  df_print: paged
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+
+```{r}
+library(tidyverse)
+library(lubridate)
+```
+
+
+### The lcDataSample4m.csv file contains data on 3 year loans issues in a 5 month period in 2014-2015, which we will use for this analyses
+```{r, message=FALSE}
+
+lcdf <- read_csv('lcDataSample5m.csv')
+```
+
+
+# Explore the data
+
+```{r}
+
+#How many loans are fully-paid and charged-off?
+lcdf %>% group_by(loan_status) %>% tally()
+  #are there values for loan_status other than "Fully Paid' and "Charged Off"?  If so, remove them:
+lcdf <- lcdf %>% filter(loan_status == "Fully Paid" | loan_status == "Charged Off")
+
+
+#How does loan status vary by loan grade
+lcdf %>% group_by(loan_status, grade) %>% tally()
+#or, using table
+table(lcdf$loan_status, lcdf$grade)
+#   Do you have loans with status other than "Fully Paid" or "Charged Off"?  
+#    If so, you should filter these out. For example, if there are some loans with status of "current", 
+#       you can filter these out by lcdf <- lcdf %>%  filter(loan_status !="Current")
+
+
+
+#How does number of loans, loan amount, interest rate vary by grade
+lcdf %>% group_by(grade) %>% tally()
+lcdf %>% group_by(grade) %>% summarise(sum(loan_amnt))   #and/or what is the mean loan_amnt by grade?
+lcdf %>% group_by(grade) %>% summarise(mean(int_rate))
+
+#Or plot these..
+ggplot(lcdf, aes( x = int_rate)) + geom_histogram()
+ggplot(lcdf, aes( x = loan_amnt)) + geom_histogram(aes(fill=grade))
+ggplot(lcdf, aes( x = loan_amnt)) + geom_histogram() + facet_wrap(~loan_status)
+
+#.....
+
+
+
+#As discussed in the case, each loan is assigned a grade , from A through G. How many loans are in each grade? What is the default rate in each grade? 
+#What is the average interest rate in each grade? What about the average percentage (annual) return? Do these numbers surprise you? If you had to invest in one grade only, which loans would you #invest in?"
+
+
+#Some summarized info on loans by grade
+lcdf %>% group_by(grade) %>% summarise(nLoans=n(), defaults=sum(loan_status=="Charged Off"), avgInterest= mean(int_rate), stdInterest=sd(int_rate), avgLoanAMt=mean(loan_amnt), avgPmnt=mean(total_pymnt))
+
+#calculate the annualized percentage return
+lcdf$annRet <- ((lcdf$total_pymnt -lcdf$funded_amnt)/lcdf$funded_amnt)*(12/36)*100
+
+#summarize by grade
+lcdf %>% group_by(grade) %>% summarise(nLoans=n(), defaults=sum(loan_status=="Charged Off"), avgInterest= mean(int_rate), stdInterest=sd(int_rate), avgLoanAMt=mean(loan_amnt), avgPmnt=mean(total_pymnt), avgRet=mean(annRet), stdRet=sd(annRet), minRet=min(annRet), maxRet=max(annRet))
+
+```
+
+
+## Calculating actual loan returns
+```{r}
+
+#Question - are some loans paid back early?  
+# - calculate the actual loan term, i.e. the time by which a loan is fully paid back
+#  Term of the loan is the duration between the last-payment-date and the loan issue-date
+#   First check the format of these two columns with date values
+head(lcdf[, c("last_pymnt_d", "issue_d")])
+
+ #Notice that issue_d is a date variable (of type date), while last_pymnt_d is of type character (like "Dec-2018", having month-year but no date). 
+#So we need to first change the character type to date:
+#     First step is to past "01-" to the character string, to get something like "01-Dec-2018", i.e. first of each month 
+lcdf$last_pymnt_d<-paste(lcdf$last_pymnt_d, "-01", sep = "")
+#     Then convert this character to a date type variable
+lcdf$last_pymnt_d<-parse_date_time(lcdf$last_pymnt_d,  "myd")
+
+#Now we can compute the duration between two dates using 
+#      as.duration(lcdf$issue_d  %--% lcdf$last_pymnt_d))
+#     This will return the duration in seconds -- try  
+#          x<- as.duration(lcdf$issue_d  %--% lcdf$last_pymnt_d)
+#          head(x)
+#     To convert it to duration in weeks, we can use x<- as.duration(lcdf$issue_d  %--% lcdf$last_pymnt_d)/dweeks(1)
+#      Or to get the duration in yearsx<- as.duration(lcdf$issue_d  %--% lcdf$last_pymnt_d)/dyears(1)
+#
+#Another issue to consider: what about those loans which are charged-off ? These are not paid back fully by the end of the 3-year term, so the duration as calculated above will not give the accurate value for the actual-term. For these loans, we can set the actual-term at 3/
+lcdf$actualTerm <- ifelse(lcdf$loan_status=="Fully Paid", as.duration(lcdf$issue_d  %--% lcdf$last_pymnt_d)/dyears(1), 3)
+
+#Then, considering this actual term, the actual annual return is
+lcdf$actualReturn <- ifelse(lcdf$actualTerm>0, ((lcdf$total_pymnt -lcdf$funded_amnt)/lcdf$funded_amnt)*(1/lcdf$actualTerm)*100, 0)
+
+```
+
+
+
+```{r}
+#What is the average interest rate, and the average of proportion of loan amount paid back, grouped by loan_status
+lcdf%>% group_by(loan_status) %>% summarise(  intRate=mean(int_rate), totRet=mean((total_pymnt-funded_amnt)/funded_amnt)  )
+# Notice that the totRet on Charged Off loans as -0.351, so, for every dollar invested, there is a loss of .351 cents.
+
+# For Fully Paid loans, is the average value of totRet what you'd expect, considering the average value for intRate?
+# Consider - if a loan were to be paid back over the full 3-year period, what would you expect for average expected total-return? And how does this compare with average of the actual totRet?
+#(the totRet seems less than what may be  expected from intRate -- this is because many loans are paid back earlier).
+
+#This summary can also help understand:
+lcdf%>% group_by(loan_status) %>% summarise(  intRate=mean(int_rate), totRet=mean((total_pymnt-funded_amnt)/funded_amnt), avgActRet=mean(actualReturn)  )
+
+
+#you may like to look at some of these variables
+lcdf %>% select(loan_status, loan_amnt, funded_amnt, total_pymnt, int_rate, actualTerm, actualReturn ) %>% view()
+
+
+#some other summaries which can help our understanding:
+
+lcdf %>% group_by(grade) %>% summarise(nLoans=n(), defaults=sum(loan_status=="Charged Off"), defaultRate=defaults/nLoans, avgInterest= mean(int_rate), avgLoanAmt=mean(loan_amnt), avgRet=mean(annRet), avgActualRet=mean(actualReturn)*100, avgActualTerm=mean(actualTerm),  minActualRet=min(actualReturn)*100, maxActualRet=max(actualReturn)*100)
+   #Q - why multiply by 100?
+
+#You can also examine such summaries (above) grouped by loan_status,...
+
+lcdf %>% group_by(loan_status) %>% summarise(nLoans=n(), avgInterest= mean(int_rate), avgLoanAmt=mean(loan_amnt), avgRet=mean(annRet), avgActualRet=mean(actualReturn)*100, avgActualTerm=mean(actualTerm),  minActualRet=min(actualReturn)*100, maxActualRet=max(actualReturn)*100)
+
+```
+
+
+## Drop some variables for potential leakage, and other
+```{r}
+
+#Drop some other columns which are not useful and those which will cause 'leakage'
+lcdf <- lcdf %>% select(-c(funded_amnt_inv, term, emp_title, pymnt_plan, title, zip_code, addr_state, out_prncp, out_prncp_inv, total_pymnt_inv, total_rec_prncp, total_rec_int, last_credit_pull_d, policy_code, disbursement_method, debt_settlement_flag, hardship_flag, application_type))
+   # Are there other variables you would drop dues to leakage concerns?
+
+
+#Drop some other variables
+varsToRemove <- c("last_pymnt_d", "last_pymnt_amnt","annRet")
+lcdf <- lcdf %>% select(-varsToRemove)
+  
+
+```
+
+
+# Missing values
+```{r}
+#Drop vars with all empty values
+lcdf <- lcdf %>% select_if(function(x){!all(is.na(x))})
+ # How many variables were dropped ?  You can check by dim(lcdf), before and after this command 
+
+
+#Of the columns remaining, names of columns with missing values
+names(lcdf)[colSums(is.na(lcdf))>0]
+
+#missing value proportions in each column
+colMeans(is.na(lcdf))
+# or, get only those columns where there are missing values
+colMeans(is.na(lcdf))[colMeans(is.na(lcdf))>0]
+
+#remove variables which have more than 60% missing values
+nm<-names(lcdf)[colMeans(is.na(lcdf))>0.6]
+lcdf <- lcdf %>% select(-nm)
+
+
+#Impute missing values - first get the columns with missing values
+colMeans(is.na(lcdf))[colMeans(is.na(lcdf))>0]
+#summary of data in these columns
+nm<- names(lcdf)[colSums(is.na(lcdf))>0]
+summary(lcdf[, nm])
+
+#mths_since_last_delinq: has 48% missings, these pertain to no delinquincy, so replace by max value (176) or a value higher than the max (500) -- we will try this out and put results in a temporary dataset lcx, with the attributes that have missng values
+lcx<-lcdf[, c(nm)]
+colMeans(is.na(lcx))[colMeans(is.na(lcx))>0]
+lcx<- lcx %>% replace_na(list(mths_since_last_delinq = 500))
+#For revol_util, suppose we want to replace the misisng values by the median
+lcx<- lcx %>% replace_na(list(revol_util=median(lcx$revol_util, na.rm=TRUE)))
+
+#Similarly for the other variables
+#After trying this out on the temporary dataframe lcx, if we are sure this is what we want, we can now  replace the missing values on the lcdf dataset
+lcdf<- lcdf %>% replace_na(list(mths_since_last_delinq=500, revol_util=median(lcdf$revol_util, na.rm=TRUE), bc_open_to_buy=median(lcdf$bc_open_to_buy, na.rm=TRUE), mo_sin_old_il_acct=1000, mths_since_recent_bc=1000, mths_since_recent_inq=50, num_tl_120dpd_2m = median(lcdf$num_tl_120dpd_2m, na.rm=TRUE),percent_bc_gt_75 = median(lcdf$percent_bc_gt_75, na.rm=TRUE), bc_util=median(lcdf$bc_util, na.rm=TRUE) ))
+
+
+#Have we addressed all missing values ?
+colMeans(is.na(lcdf))[colMeans(is.na(lcdf))>0]
+  #You will see that last_pymnt_d still have a few missing values - do you understand what these missing values are for?
+  # Are they probably for the charged-off loans ?  You can check:
+  #lcdf %>% filter(is.na(lcdf$last_pymnt_d)) %>% group_by(loan_status) %>% tally()
+   
+
+```
+
+
+## Some variable conversion, and  derived attributes
+```{r}
+
+#Consider emp_length - what are the different values, and how many examples are there for each value
+lcdf %>% group_by(emp_length) %>% tally()
+
+#convert emp_length to factor -- with factor levels ordered in a meaningful way
+lcdf$emp_length <- factor(lcdf$emp_length, levels=c("n/a", "< 1 year","1 year","2 years", "3 years" ,  "4 years",   "5 years",   "6 years",   "7 years" ,  "8 years", "9 years", "10+ years" ))
+# Note: we could have converted to factor by simply using x<-as.factor(lcdf$emp_length), but here the factor levels would be randomly arranged
+
+
+
+#Look at loan purpose
+lcdf %>% group_by(purpose) %>% tally()
+  # do you want to recode some categories with very few cases to "other"
+lcdf$purpose <- fct_recode(lcdf$purpose, other="wedding", other="educational", other="renewable_energy")
+
+
+
+#Derived attribute: proportion of satisfactory bankcard accounts 
+lcdf$propSatisBankcardAccts <- ifelse(lcdf$num_bc_tl>0, lcdf$num_bc_sats/lcdf$num_bc_tl, 0)
+ 
+#Another one - lets calculate the length of borrower's history with LC
+#  i.e time between earliest_cr_line and issue_d
+#  Look at these variables - you will notice that earliest_cr_line is read in as 'chr', we first convert it to date
+#      and then subtract the two dates
+lcdf$earliest_cr_line<-paste(lcdf$earliest_cr_line, "-01", sep = "")
+lcdf$earliest_cr_line<-parse_date_time(lcdf$earliest_cr_line, "myd")
+#lcdf$issue_d<-parse_date_time(lcdf$issue_d, "myd") <<---we should not do this, since issue_d is already a date type variable
+ 
+# we can use the lubridate functions to precisely handle date-times durations
+lcdf$borrHistory <- as.duration(lcdf$earliest_cr_line %--% lcdf$issue_d  ) / dyears(1)
+
+
+#Another new attribute: ratio of openAccounts to totalAccounts
+#....
+#.....
+
+
+
+
+#Take a look at the variables in the data-set -- are there any variable type changes you want to consider?
+glimpse(lcdf)
+
+#  notice that there are a few characher type variables - grade, sub_grade, verification_status,....
+#   We can  convert all of these to factor
+lcdf <- lcdf %>% mutate_if(is.character, as.factor)
+
+```
+
+
+
+## Split the data into trn, text subsets
+```{r}
+#split the data into trn, tst subsets
+TRNFRACTION = 0.5 #or use other values
+nr<-nrow(lcdf)
+
+trnIndex<- sample(1:nr, size = round(TRNFRACTION * nr), replace=FALSE)
+lcdfTrn <- lcdf[trnIndex, ]
+lcdfTst <- lcdf[-trnIndex, ]
+```
+
+
+## Uni-variate analyses - which variables are individually predictive of the outcome ?
+###Can compute the AUC for each variable
+```{r, message=FALSE}
+library(pROC) #this package has a function auc(..) which we can readily use
+
+#We will use the function auc(response, prediction) which returns the AUC value for the specified predictor variable, and considering the response variable as the dependent. Make sure you understand how this works.
+# For example:
+auc(response=lcdfTrn$loan_status, lcdfTrn$loan_amnt)
+ # returns the value for loan_amt as predictor
+
+#In the auc(..) function, the predictor variable has to be numeric  - otherwise, how would it calculate the AUC (think about how auc is calculated).  For a factor variable, we can consider the factors as numbers:
+auc(response=lcdfTrn$loan_status, as.numeric(lcdfTrn$emp_length))
+
+# There are a few date type variables - we will ignore these here.
+
+#How would you do this for all variables in the dataset?
+# Rather than call the function individually for each variable, we can use the sapply(..) function
+
+# For the numeric variables:
+aucsNum<-sapply(lcdfTrn %>% select_if(is.numeric), auc, response=lcdfTrn$loan_status)
+  #How does sapply work?
+
+#Or considering both numeric and factor variables:
+aucAll<- sapply(lcdfTrn %>% mutate_if(is.factor, as.numeric) %>% select_if(is.numeric), auc, response=lcdfTrn$loan_status) 
+
+#TO determine which variables have auc > 0.5
+aucAll[aucAll>0.5]
+
+#Or, we can use the tidy(..) function from the broom package - which converts the 'messy' output into a tidy form as a tibble
+library(broom)
+
+tidy(aucAll[aucAll > 0.5]) %>% view()
+
+# or  in any range of values like, tidy(aucAll[aucAll >=0.5 & aucAll < 0.6])
+# or in sorted order
+tidy(aucAll) %>% arrange(desc(aucAll))
+
+```
+
+
+
+
+
+## Next we can build some  models
+```{r}
+library(rpart)
+
+#It can be useful to convert the target variable, loan_status to  a factor variable
+lcdf$loan_status <- factor(lcdf$loan_status, levels=c("Fully Paid", "Charged Off"))
+
+
+lcDT1 <- rpart(loan_status ~., data=lcdfTrn, method="class", parms = list(split = "information"), control = rpart.control(minsplit = 30))
+
+lcDT1 <- rpart(loan_status ~., data=lcdfTrn, method="class", parms = list(split = "information"), control = rpart.control(cp=0.0001, minsplit = 50))
+
+
+#Evaluate performance
+predTrn=predict(lcDT1,lcdfTrn, type='class')
+table(pred = predTrn, true=lcdfTrn$loan_status)
+mean(predTrn == lcdfTrn$loan_status)
+table(pred = predict(lcDT1,lcdfTst, type='class'), true=lcdfTst$loan_status)
+mean(predict(lcDT1,lcdfTst, type='class') ==lcdfTst$loan_status)
+
+# Does it look too good to be true?
+#    WHY ??? - Check your predictors in the model.
+
+```
+
+
+
+
+
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
